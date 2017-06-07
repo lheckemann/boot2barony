@@ -3,13 +3,13 @@
   rootSize ? 3072
 }:
 let
-  pkgs = import ./. {};
+  pkgs = import <nixpkgs> {};
   inherit (pkgs) stdenv runCommand vmTools;
-  vmConfig = (import ./nixos/lib/eval-config.nix {
+  vmConfig = (import <nixpkgs/nixos/lib/eval-config.nix> {
     inherit (pkgs) system;
-    modules = [ ./nixos/modules/installer/tools/tools.nix ];
+    modules = [ <nixpkgs/nixos/modules/installer/tools/tools.nix> ];
   }).config;
-  destConfig = (import ./nixos/lib/eval-config.nix {
+  destConfig = (import <nixpkgs/nixos/lib/eval-config.nix> {
     inherit (pkgs) system;
     modules = [ ./barony-bootable.nix ./barony-config.nix ];
   }).config;

@@ -1,14 +1,14 @@
-let pkgs = import ./. {};
+let pkgs = import <nixpkgs> {};
   bootConfig = { pkgs, lib, config, ... }: {
     sdImage.populateBootCommands = "";
   };
-  evaluated = (import ./nixos/lib/eval-config.nix {
+  evaluated = (import <nixpkgs/nixos/lib/eval-config.nix> {
     inherit (pkgs) system;
-    modules = [ 
+    modules = [
       ./barony-bootable.nix
-      ./barony-config.nix 
-      ./nixos/modules/installer/cd-dvd/sd-image.nix
-      ./nixos/modules/profiles/installation-device.nix
+      ./barony-config.nix
+      <nixpkgs/nixos/modules/installer/cd-dvd/sd-image.nix>
+      <nixpkgs/nixos/modules/profiles/installation-device.nix>
       bootConfig
     ];
   });

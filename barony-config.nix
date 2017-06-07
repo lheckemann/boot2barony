@@ -28,29 +28,29 @@ in
     uid = 1000;
   };
 
-  environment.systemPackages = with pkgs; [];
+  environment.systemPackages = with pkgs; [ mumble firefox ];
 
-  #system.activationScripts.baronyDesktop = let
-  #  inherit (pkgs) stdenv writeText writeScriptBin barony;
-  #  baronyScript = writeScriptBin "barony" ''
-  #    #!${stdenv.shell}
-  #    ${barony}/bin/barony "-datadir=${baronyData}"
-  #  '';
-  #  desktopFile = writeText "barony.desktop" ''
-  #    [Desktop Entry]
-  #    Version=1.0
-  #    Type=Application
-  #    Name=Barony
-  #    Exec=${baronyScript}/bin/barony
-  #    Icon=${baronyData}/Barony_Icon256x256.png
-  #  '';
-  #  in ''
-  #    mkdir -p /home/barony/.local/share/applications
-  #    ln -s ${desktopFile} /home/barony/.local/share/applications/barony.desktop
-  #    mkdir -p /home/barony/Desktop
-  #    ln -s ${desktopFile} /home/barony/Desktop/barony.desktop
-  #    chown -R ${builtins.toString config.users.users.barony.uid} /home/barony
-  #  '';
+  system.activationScripts.baronyDesktop = let
+    inherit (pkgs) stdenv writeText writeScriptBin barony;
+    baronyScript = writeScriptBin "barony" ''
+      #!${stdenv.shell}
+      ${barony}/bin/barony "-datadir=${baronyData}"
+    '';
+    desktopFile = writeText "barony.desktop" ''
+      [Desktop Entry]
+      Version=1.0
+      Type=Application
+      Name=Barony
+      Exec=${baronyScript}/bin/barony
+      Icon=${baronyData}/Barony_Icon256x256.png
+    '';
+    in ''
+      mkdir -p /home/barony/.local/share/applications
+      ln -s ${desktopFile} /home/barony/.local/share/applications/barony.desktop
+      mkdir -p /home/barony/Desktop
+      ln -s ${desktopFile} /home/barony/Desktop/barony.desktop
+      chown -R ${builtins.toString config.users.users.barony.uid} /home/barony
+    '';
 
   hardware.enableAllFirmware = true;
   networking.networkmanager.enable = true;

@@ -48,16 +48,16 @@
 with lib;
 
 let
-  partedCommands = (foldl (
+  partitionCommands = (foldl (
     {cmds, offset}:
     {type, size ? null}:
       assert size != -1; let
         partEnd = if size != null then "${toString (offset + size)}M" else "-1s";
       in {
-        cmds = cmds + "\nparted /dev/vda -- mkpart primary ext2 ${toString offset}M ${toString partEnd}";
+        cmds = cmds + "start=${toString offset}M ${optionalString (size != null) "size=${toString size}M"}\n";
         offset = if size != null then offset + size else -1;
       }
-  ) {cmds = ""; offset = 1;} partitions).cmds;
+  ) {cmds = "sfdisk /dev/vda <<EOF\n"; offset = 1;} partitions).cmds + "EOF";
 
   rootDisk = let
     partitionIndex = (foldl (
@@ -94,19 +94,12 @@ in pkgs.vmTools.runInLinuxVM (
       memSize = 1024;
     }
     ''
-      ${if partitions != [] then ''
-        # Create a single / partition.
-        parted /dev/vda mklabel ${labelType}
-        ${partedCommands}
-        for blk in /sys/class/block/vda?*/uevent ; do
-          . $blk/uevent
-          mknod /dev/$(basename $blk) b $MAJOR $MINOR
-        done
-        sfdisk
-        rootDisk=${rootDisk}
-      '' else ''
-        rootDisk=/dev/vda
-      ''}
+      ${partitionCommands}
+      for blk in /sys/class/block/vda?* ; do
+        . $blk/uevent
+        mknod /dev/$(basename $blk) b $MAJOR $MINOR
+      done
+      rootDisk=${rootDisk}
 
       # Create an empty filesystem and mount it.
       mkfs.${fsType} -L nixos $rootDisk

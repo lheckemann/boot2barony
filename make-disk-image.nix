@@ -20,14 +20,11 @@
   # directly.
   partitions ? [
     {type = "efi"; size = 200;}
-    {type = "ext4";}
+    {type = "ext4"; label = "NIXOS_IMG_ROOT"; isRoot = true;}
   ]
 
   # Whether to invoke switch-to-configuration boot during image creation
 , installBootLoader ? true
-
-, # The root file system type.
-  fsType ? "ext4"
 
 , # The initial NixOS configuration file to be copied to
   # /etc/nixos/configuration.nix.
@@ -48,28 +45,32 @@
 with lib;
 
 let
+  # Number the partitions
+  numberedPartitions = (foldl
+      ({cur, parts}: part: {
+        parts = parts ++ [(part // {num = cur;})];
+        cur = cur + 1;
+      })
+      {cur = 1; parts = [];}
+      partitions).parts;
+
   partitionCommands = (foldl (
     {cmds, offset}:
-    {type, size ? null}:
+    {type, size ? null, num, label ? "", ...}:
       assert size != -1; let
         partEnd = if size != null then "${toString (offset + size)}M" else "-1s";
       in {
-        cmds = cmds + "start=${toString offset}M ${optionalString (size != null) "size=${toString size}M"}\n";
+        cmds = cmds + "/dev/vda${toString num} : "
+                    + "start=${toString offset}M "
+                    + optionalString (size != null) "size=${toString size}M "
+                    + "\n";
         offset = if size != null then offset + size else -1;
       }
-  ) {cmds = "sfdisk /dev/vda <<EOF\n"; offset = 1;} partitions).cmds + "EOF";
+  ) {cmds = "sfdisk /dev/vda <<EOF\n"; offset = 1;} numberedPartitions).cmds + "EOF";
 
-  rootDisk = let
-    partitionIndex = (foldl (
-      {index, done ? false}@state: part:
-        if done 
-        then state
-        else if part.isRoot or false 
-        then {inherit index; done = true;}
-        else {index = index+1;}
-    ) {index = 1;} partitions).index;
-  in
-    "/dev/vda${toString partitionIndex}";
+  rootPart = let num = (findFirst (x: x.isRoot or false) (throw "No root disk") numberedPartitions).num;
+  in "/dev/vda${toString num}";
+
 
 in pkgs.vmTools.runInLinuxVM (
   pkgs.runCommand name
@@ -94,17 +95,16 @@ in pkgs.vmTools.runInLinuxVM (
       memSize = 1024;
     }
     ''
+      set -x
       ${partitionCommands}
       for blk in /sys/class/block/vda?* ; do
         . $blk/uevent
         mknod /dev/$(basename $blk) b $MAJOR $MINOR
       done
-      rootDisk=${rootDisk}
+      rootPart=${rootPart}
 
-      # Create an empty filesystem and mount it.
-      mkfs.${fsType} -L nixos $rootDisk
-      mkdir /mnt
-      mount $rootDisk /mnt
+      # Create filesystems and mount them
+      set +x; false
 
       # Register the paths in the Nix database.
       printRegistration=1 perl ${pkgs.pathsFromGraph} /tmp/xchg/closure | \
@@ -173,8 +173,6 @@ in pkgs.vmTools.runInLinuxVM (
       # Make sure resize2fs works. Note that resize2fs has stricter criteria for resizing than a normal
       # mount, so the `-c 0` and `-i 0` don't affect it. Setting it to `now` doesn't produce deterministic
       # output, of course, but we can fix that when/if we start making images deterministic.
-      ${optionalString (fsType == "ext4") ''
-        tune2fs -T now -c 0 -i 0 $rootDisk
-      ''}
+      #  tune2fs -T now -c 0 -i 0 $rootPart
     ''
 )

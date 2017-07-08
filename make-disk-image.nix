@@ -19,8 +19,8 @@
   # containing the root filesystem) or contain the root filesystem
   # directly.
   partitions ? [
-    {type = "efi"; size = 200;}
-    {type = "ext4"; label = "NIXOS_IMG_ROOT"; isRoot = true;}
+    {type = "efi"; size = 200; label = "ESP"; mount = "/boot";}
+    {type = "ext4"; label = "NIXOS_IMG_ROOT"; mount = "/";}
   ]
 
   # Whether to invoke switch-to-configuration boot during image creation
@@ -45,32 +45,66 @@
 with lib;
 
 let
-  # Number the partitions
-  numberedPartitions = (foldl
-      ({cur, parts}: part: {
-        parts = parts ++ [(part // {num = cur;})];
+  parts = (foldl
+      ({cur, curOff, parts}: part: {
+        parts = parts ++ [(part // rec {
+          num = cur;
+          offset = curOff;
+          deviceName = "vda${toString num}";
+          devicePath = "/dev/${deviceName}";
+        })];
         cur = cur + 1;
+        # Will fail to evaluate if a partition with size null is not the last
+        curOff = curOff + part.size;
       })
-      {cur = 1; parts = [];}
+      {cur = 1; curOff = 1; parts = [];}
       partitions).parts;
 
-  partitionCommands = (foldl (
-    {cmds, offset}:
-    {type, size ? null, num, label ? "", ...}:
-      assert size != -1; let
-        partEnd = if size != null then "${toString (offset + size)}M" else "-1s";
-      in {
-        cmds = cmds + "/dev/vda${toString num} : "
-                    + "start=${toString offset}M "
-                    + optionalString (size != null) "size=${toString size}M "
-                    + "\n";
-        offset = if size != null then offset + size else -1;
-      }
-  ) {cmds = "sfdisk /dev/vda <<EOF\n"; offset = 1;} numberedPartitions).cmds + "EOF";
+  partsMountOrder = (toposort (a: b: hasPrefix a.mount b.mount) parts).result;
+  partsUmountOrder = (toposort (a: b: hasPrefix b.mount a.mount) parts).result;
 
-  rootPart = let num = (findFirst (x: x.isRoot or false) (throw "No root disk") numberedPartitions).num;
-  in "/dev/vda${toString num}";
+  fsTypes = {
+    ext4 = {
+      mkfs = {label, devicePath, ...}: "mkfs.ext4 ${devicePath} -L ${label}";
+      gptType = "0FC63DAF-8483-4772-8E79-3D69D8477DE4";
+    };
+    efi = {
+      mkfs = {label, devicePath, ...}: "mkdosfs -F 32 ${devicePath} -n ${label}";
+      gptType = "C12A7328-F81F-11D2-BA4B-00A0C93EC93B";
+    };
+  };
 
+  forEachFs = fn: concatMapStringsSep "\n" fn parts;
+
+  partitionCommands = ''
+    sfdisk /dev/vda <<EOF
+    label: gpt
+  '' + forEachFs ({type, size ? null, num, label ? "", offset, ...}:
+            "/dev/vda${toString num} : "
+          + "start=${toString offset}M, "
+          + optionalString (size != null) "size=${toString size}M, "
+          + "type=${fsTypes.${type}.gptType}, "
+          + optionalString (label != "") "name=${label}, "
+          + "\n")
+    + "EOF";
+
+  rootPart = let num = (findFirst (x: x.mount or "" == "/") (throw "No root disk") parts).num;
+    in "/dev/vda${toString num}";
+
+  makeFilesystems = forEachFs (fs: fsTypes.${fs.type}.mkfs fs);
+
+  mountFilesystems = concatMapStringsSep "\n"
+    ({num, mount, ...}: ''
+        mkdir -p /mnt/${mount}
+        mount /dev/vda${toString num} /mnt/${mount}
+      '')
+    partsMountOrder;
+
+  unmountFilesystems = concatMapStringsSep "\n"
+    ({num, mount, ...}: ''
+        umount /mnt/${mount}
+      '')
+    partsUmountOrder;
 
 in pkgs.vmTools.runInLinuxVM (
   pkgs.runCommand name
@@ -81,7 +115,7 @@ in pkgs.vmTools.runInLinuxVM (
           ${pkgs.vmTools.qemu}/bin/qemu-img create -f ${format} $diskImage "${toString diskSize}M"
           mv closure xchg/
         '';
-      buildInputs = with pkgs; [ utillinux perl e2fsprogs parted rsync ];
+      buildInputs = with pkgs; [ utillinux perl e2fsprogs parted rsync dosfstools strace ];
 
       # I'm preserving the line below because I'm going to search for it across nixpkgs to consolidate
       # image building logic. The comment right below this now appears in 4 different places in nixpkgs :)
@@ -95,37 +129,52 @@ in pkgs.vmTools.runInLinuxVM (
       memSize = 1024;
     }
     ''
-      set -x
+      export PATH=${pkgs.nix}/bin:$PATH
       ${partitionCommands}
+      mkdir /dev/block
       for blk in /sys/class/block/vda?* ; do
         . $blk/uevent
         mknod /dev/$(basename $blk) b $MAJOR $MINOR
+        # Expected by bootctl
+        mknod /dev/block/$MAJOR:$MINOR b $MAJOR $MINOR
       done
       rootPart=${rootPart}
 
       # Create filesystems and mount them
-      set +x; false
+      ${makeFilesystems}
+      ${mountFilesystems}
 
       # Register the paths in the Nix database.
       printRegistration=1 perl ${pkgs.pathsFromGraph} /tmp/xchg/closure | \
           ${config.nix.package.out}/bin/nix-store --load-db --option build-users-group ""
 
-      ${if fixValidity then ''
+      #$printRegistration}/bin/nix-print-registration /tmp/xchg/closure > /tmp/db
+      #</tmp/db ${config.nix.package.out}/bin/nix-store --load-db --option build-users-group ""
+
+      ${optionalString fixValidity ''
+        echo "Fixing validity"
         # Add missing size/hash fields to the database. FIXME:
         # exportReferencesGraph should provide these directly.
-        ${config.nix.package.out}/bin/nix-store --verify --check-contents --option build-users-group ""
-      '' else ""}
+        count=$(${config.nix.package.out}/bin/nix-store --verify --check-contents --option build-users-group "" 2>&1 | wc -l)
+        printf -- "Made %d changes\n" "$count"
+      ''}
 
-      # In case the bootloader tries to write to /dev/sda…
-      ln -s vda /dev/xvda
-      ln -s vda /dev/sda
+      #find / -not -path '/sys*' -not -path '/proc/*'
 
       # Install the closure onto the image
       USER=root ${config.system.build.nixos-install}/bin/nixos-install \
         --closure ${config.system.build.toplevel} \
         --no-channel-copy \
         --no-root-passwd \
-        ${optionalString (!installBootLoader) "--no-bootloader"}
+        ${optionalString (!installBootLoader) "--no-bootloader"} || failed=1
+
+      df -h
+      [[ -z $failed ]] # Die now if we failed
+
+      mkdir -p /mnt/boot/EFI/BOOT
+      cp ${pkgs.systemd}/lib/systemd/boot/efi/systemd-bootx64.efi /mnt/boot/EFI/BOOT/BOOTX64.EFI
+
+      find /mnt/boot
 
       # Install a configuration.nix.
       mkdir -p /mnt/etc/nixos
@@ -168,7 +217,7 @@ in pkgs.vmTools.runInLinuxVM (
         fi
       done
 
-      umount /mnt
+      ${unmountFilesystems}
 
       # Make sure resize2fs works. Note that resize2fs has stricter criteria for resizing than a normal
       # mount, so the `-c 0` and `-i 0` don't affect it. Setting it to `now` doesn't produce deterministic

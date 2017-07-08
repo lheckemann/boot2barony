@@ -11,16 +11,16 @@ in
       user = "barony";
     };
     desktopManager.xfce.enable = true;
-    #windowManager.default = "barony";
-    #windowManager.session = lib.singleton {
-    #  name = "barony";
-    #  start = ''
-    #    ${pkgs.xfce.xfwm4}/bin/xfwm4 &
-    #    waitPID=$!
-    #    ${pkgs.xfce.xfce4panel}/bin/xfce4-panel &
-    #    ${pkgs.networkmanagerapplet}/bin/nm-applet &
-    #  '';
-    #};
+    windowManager.default = "barony";
+    windowManager.session = lib.singleton {
+      name = "barony";
+      start = ''
+        ${pkgs.xfce.xfwm4}/bin/xfwm4 &
+        waitPID=$!
+        ${pkgs.xfce.xfce4panel}/bin/xfce4-panel &
+        ${pkgs.networkmanagerapplet}/bin/nm-applet &
+      '';
+    };
   };
 
   users.extraUsers.barony = {

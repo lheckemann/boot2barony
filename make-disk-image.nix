@@ -115,7 +115,7 @@ in pkgs.vmTools.runInLinuxVM (
           ${pkgs.vmTools.qemu}/bin/qemu-img create -f ${format} $diskImage "${toString diskSize}M"
           mv closure xchg/
         '';
-      buildInputs = with pkgs; [ utillinux perl e2fsprogs parted rsync dosfstools strace ];
+      buildInputs = with pkgs; [ fakeroot nologin utillinux perl e2fsprogs parted rsync dosfstools strace ];
 
       # I'm preserving the line below because I'm going to search for it across nixpkgs to consolidate
       # image building logic. The comment right below this now appears in 4 different places in nixpkgs :)
@@ -139,7 +139,12 @@ in pkgs.vmTools.runInLinuxVM (
         mknod /dev/block/$MAJOR:$MINOR b $MAJOR $MINOR
       done
       rootPart=${rootPart}
-
+  
+      # Supress complains about no nixbld and root groups
+      mkdir -p /etc/nix
+      echo "build-users-group =" > /etc/nix/nix.conf
+      echo "root:x:0:" > /etc/group
+      
       # Create filesystems and mount them
       ${makeFilesystems}
       ${mountFilesystems}
@@ -162,7 +167,8 @@ in pkgs.vmTools.runInLinuxVM (
       #find / -not -path '/sys*' -not -path '/proc/*'
 
       # Install the closure onto the image
-      USER=root ${config.system.build.nixos-install}/bin/nixos-install \
+      # fakeroot deceits nixos-install when it tries to modify permissions of readonly /nix/store
+      USER=root fakeroot -- ${config.system.build.nixos-install}/bin/nixos-install \
         --closure ${config.system.build.toplevel} \
         --no-channel-copy \
         --no-root-passwd \
